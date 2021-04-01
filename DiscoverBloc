@@ -1,0 +1,222 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:downbeat_new/models/discoverdata.dart';
+import 'package:rxdart/rxdart.dart';
+import 'connection.dart';
+import 'custompreferences.dart';
+import 'discoverEvents.dart';
+
+class DiscoverBloc{
+
+  StreamController _streamController;
+
+  final _searchTextController = BehaviorSubject<String>();
+
+
+  final _lattLongCtrl= BehaviorSubject<LatLng>();
+  Stream<LatLng> get getLatt=>_lattLongCtrl.stream;
+  StreamSink<LatLng> get lattSink=>_lattLongCtrl.sink;
+
+  final _placelattLongCtrl= BehaviorSubject<LatLng>();
+  Stream<LatLng> get placeLattLng=>_placelattLongCtrl.stream;
+  StreamSink<LatLng> get placeLattlngSink=>_placelattLongCtrl.sink;
+
+  //Search text stream
+  Stream<String> get seachText => _searchTextController.stream;
+  //Search text sink
+  StreamSink<String> get seachTextSink =>_searchTextController.sink;
+
+
+  //Interest list stream
+  final _interestListCtrl= BehaviorSubject<List<int>>();
+  Stream<List<int>> get interestListStrm => _interestListCtrl.stream;
+  //Search text sink
+  StreamSink<List<int>> get interestListSink =>_interestListCtrl.sink;
+
+  final _dateCtrl= BehaviorSubject<String>();
+  //Date stream
+  Stream<String> get dateStrm => _dateCtrl.stream;
+  //Date sink
+  StreamSink<String> get dateSink =>_dateCtrl.sink;
+
+  StreamSink<List<DiscoverData>> get discoverListSink=>
+  _streamController.sink;
+
+  Stream<List<DiscoverData>> get discoverListStream=>
+  _streamController.stream;
+
+
+  final _counterEventController=
+  StreamController<Discoverdefault>();
+
+  Sink<Discoverdefault> get counterEventSink=>
+      _counterEventController.sink;
+
+
+  DiscoverBloc()
+  {
+  _streamController=StreamController<List<DiscoverData>>();
+  _streamController.add(new List<DiscoverData>());
+   getdiscoverPlaces('','',new List<int>(),'');
+  _counterEventController.stream.listen(_stateEvents);
+  }
+
+  void _stateEvents(event)
+  {
+    if(event is searchdiscover){
+      print('search ${_searchTextController.value}');
+      final searchText = _searchTextController.value;
+      getdiscoverPlaces('',searchText,new List<int>(),'');
+    }else if(event is filterRecordDefault)
+    {
+      getdiscoverPlaces(_dateCtrl.value.toString(),'',_interestListCtrl.value,'');
+    }
+    else if(event is placePickeSearch)
+    {
+      getdiscoverPlaces('','',new List<int>(),'placePick');
+    }
+    else{
+      getdiscoverPlaces('','',new List<int>(),'');
+    }
+  }
+
+  dispose() {
+    _streamController.close();
+    _searchTextController.close();
+    _counterEventController.close();
+    _dateCtrl.close();
+    _interestListCtrl.close();
+    _placelattLongCtrl.close();
+    _lattLongCtrl.close();
+  }
+/*  double latt, double long,
+  List<int> list, String date, String searchText*/
+  Future<DiscoverData> getdiscoverPlaces(String date,String searchText,List<int> selectintersted,
+      String fromPlacePic) async
+  {
+
+      try {
+        List<DiscoverData> browseList=[];
+        String token = await CustomPreferences.getpreferences('token');
+        Map<String, String> requestHeaders;
+        if (token!=null && token.isNotEmpty ) {
+          requestHeaders = {
+            'Accept': 'application/json',
+            'Authorization': 'Bearer ' + token
+          };
+        } else {
+          requestHeaders = {
+            'Accept': 'application/json',
+            'Authorization': 'Bearer '
+          };
+        }
+        var requestData;
+        if(date.isEmpty && searchText.isNotEmpty){
+          requestData =
+          {
+            "date": '',
+            "interest": '',
+            "lat": _lattLongCtrl.value.latitude.toString(),
+            "long": _lattLongCtrl.value.longitude.toString(),
+            "search": searchText,
+          };
+        }else if(date.isNotEmpty && selectintersted.length>0){
+          requestData =
+          {
+            "date": _dateCtrl.value.toString(),
+            "interest": _interestListCtrl.value.toString(),
+            "lat": _lattLongCtrl.value.latitude.toString(),
+            "long": _lattLongCtrl.value.longitude.toString(),
+            "search": '',
+          };
+        }
+        else if(fromPlacePic.isNotEmpty && fromPlacePic=='placePick'){
+          requestData =
+          {
+            "date": '',
+            "interest":'',
+            "lat": _placelattLongCtrl.value.latitude.toString(),
+            "long": _placelattLongCtrl.value.longitude.toString(),
+            "search": '',
+          };
+        }
+        else {
+          requestData =
+          {
+            "date": '',
+            "interest": '',
+            "lat": _lattLongCtrl.value.latitude.toString(),
+            "long": _lattLongCtrl.value.longitude.toString(),
+            "search": '',
+          };
+        }
+
+        /*if (date.isNotEmpty && selectintersted.length > 0) {
+          requestData = {
+            "date": date,
+            "interest": selectintersted.toString(),
+            *//*"lat": latt.toString(),
+        "long": long.toString(),*//*
+            "lat": '26.894012',
+            "long": '75.747192',
+          };
+        } else if (date.isEmpty && searchText.isNotEmpty) {
+          requestData = {
+            "date": 'date',
+            "interest": '',
+//        "lat": latt.toString(),
+//        "long": long.toString(),
+            "lat": '26.894012',
+            "long": '75.747192',
+            "search": searchText,
+          };
+        } else {
+          requestData = {
+            "date": '',
+            "interest": '',
+            "lat": '26.894012',
+            "long": '75.747192',
+          };*/
+
+          print('send nerby request data $requestData');
+          final response = await http.post( Uri.parse(Connection.url + 'discover'),
+              headers: requestHeaders, body: requestData);
+          if (response.statusCode == 200) {
+            Map<String, dynamic> responseJson = json.decode(response.body);
+            var res = responseJson['data'] as List;
+            if(res!=null && res.length>0)
+            {
+              //discoverListSink.add(responseJson['data'] as List);
+              if(responseJson['data']!=null)
+              {
+                for(var i=0;i<responseJson['data'].length;i++)
+                {
+                  browseList.add(DiscoverData.fromJson(responseJson['data'][i]));
+                }
+              }
+              discoverListSink.add(browseList);
+              /*discoverListSinkbrowseList.add(
+                  res.map<DiscoverData>((json) => DiscoverData.fromJson(json))
+                      .toList());*/
+            }else{
+              discoverListSink.add([]);
+            }
+
+            return DiscoverData.fromJson(responseJson);
+////        return _items;
+          }
+          /*else if (response.statusCode == 500) {
+        return servererrorresponse;
+      }*/
+//        }
+       }
+      catch (exception)
+      {
+        throw exception;
+      }
+
+
+  }
+}
