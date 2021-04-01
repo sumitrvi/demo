@@ -1,0 +1,746 @@
+import 'dart:async';
+import 'package:app_settings/app_settings.dart';
+import 'models/associated_bandmodal.dart';
+import 'models/discoverdata.dart';
+import 'utils/comman.dart';
+import 'utils/constants.dart';
+import 'utils/discoverbloc.dart';
+import 'widgets/customappbar.dart';
+import 'widgets/discover_popupwidgets.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:location/location.dart';
+import 'package:provider/provider.dart';
+import 'package:rating_bar/rating_bar.dart';
+import '../utils/res.dart';
+import '../widgets/discoverband_widget.dart';
+import '../widgets/menudrawer.dart';
+import '../utils/comman.dart';
+import '../models/associated_bandmodal.dart';
+import '../utils/discoverEvents.dart';
+class Discover_Screen extends StatefulWidget {
+  @override
+  _Discover_ScreenState createState() => _Discover_ScreenState();
+}
+
+class _Discover_ScreenState extends State<Discover_Screen> {
+  Completer<GoogleMapController> _controller = Completer();
+  LatLng _center = const LatLng(37.223866, -95.713816);
+  GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  bool is_init = true;
+  Set<Marker> _marker;
+  BitmapDescriptor marker_icon,liveMarkerIcon;
+  bool showband;
+  Location location = new Location();
+  bool _serviceEnabled;
+  PermissionStatus _permissionGranted;
+  LocationData _locationData;
+  var associateProvider, discoverProvider;
+  List<int> interestList = new List<int>();
+  DiscoverBloc disbloc;
+  GoogleMapController _mapcontroller;
+
+  @override
+  void initState() {
+//    print('discover initState called');
+    disbloc = DiscoverBloc();
+    disbloc.counterEventSink.add(discover_default());
+    Future.delayed(new Duration(seconds: 0), () async {
+      await showlocation();
+    });
+
+    associateProvider =
+        Provider.of<AssociatedBandModal>(context, listen: false);
+//    discoverProvider = Provider.of<DiscoverPlaces>(context, listen: false);
+    _marker = {};
+    Comman.bitmapDescriptorFromSvgAsset(context, Res.mapicon_svg).then((data) {
+      setState(()
+      {
+        marker_icon = data;
+      });
+    });
+    Comman.bitmapDescriptorFromSvgAsset(context, Res.map_live_svg).then((data) {
+      setState(() {
+        liveMarkerIcon = data;
+      });
+    });
+    super.initState();
+    // lat: 26.894012, long: 75.747192
+  }
+
+  @override
+  void didChangeDependencies() {
+//    print('didChangeDependencies called');
+    super.didChangeDependencies();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    showband = MediaQuery.of(context).viewInsets.bottom == 0.0;
+    print('discover build called $showband');
+    return WillPopScope(
+        onWillPop: _onWillPop,
+        child: Scaffold(
+          key: _scaffoldKey,
+          appBar: CustomAppbar(
+              _scaffoldKey, 'Discover', 150.0,
+              filterRecord, searchDiscover,openPlacepicker:openPlacepicker),
+          endDrawer: MenuDrawer(),
+          body: Stack(
+            children: <Widget>[
+              _buildGoogleMap(context),
+              showband ? _buildContainer(context) : Text(''),
+            ],
+          ),
+        ));
+  }
+
+//  set markers with custom image on map
+  Future<void> setCustomMapPin() async {
+    try {
+      if (_locationData.latitude != null && _locationData.longitude != null)
+      {
+        disbloc.lattSink
+            .add(LatLng(_locationData.latitude, _locationData.longitude));
+        disbloc.counterEventSink.add(discover_default());
+      }
+    } catch (excpetion) {
+      print(excpetion);
+      Comman.showSnakBarwithkey(
+          Constants.servererror, _scaffoldKey, Colors.red);
+    }
+  }
+
+
+  _buildGoogleMap(BuildContext context) {
+//    Completer<GoogleMapController> _controllerComplete = Completer();
+    return Container(
+        child: _locationData != null
+            ? StreamBuilder<List<DiscoverData>>(
+                stream: disbloc.discoverListStream,
+                builder: (context, snapshot) {
+                  switch (snapshot.connectionState) {
+                    case ConnectionState.none:
+                      Comman.loadingIndicator(Theme.of(context).primaryColor);
+                      break;
+                    case ConnectionState.waiting:
+                      return Comman.loadingIndicator(Theme.of(context).primaryColor);
+                      break;
+                    case ConnectionState.active:
+                      if(!snapshot.hasData && snapshot.data==null)
+                      {
+                        return Container(child:
+                        Comman.loadingIndicator(Theme.of(context).primaryColor));
+                      }else if(snapshot.hasData)
+                      {
+                        return GoogleMap(
+                          myLocationEnabled: true,
+                          myLocationButtonEnabled: true,
+                          mapType: MapType.normal,
+                          initialCameraPosition: CameraPosition(
+                            target: _center,
+                            zoom: 16.0,
+                          ),
+                          onMapCreated: (GoogleMapController controller)
+                          {
+                            if(!_controller.isCompleted)
+                            {
+                              _controller.complete(controller);
+                              _mapcontroller=controller;
+                            }
+                          },
+//              markers: _marker,
+                          markers: snapshot.hasData && snapshot.data.length>0?
+                          _showmarker(snapshot.data):new Set<Marker>(),
+                        );
+                      }else{
+
+                      }
+                      break;
+                  }
+                })
+            : Comman.loadingIndicator(Colors.red));
+  }
+
+  Widget _buildContainer(BuildContext ctx) {
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: Container(
+          margin: EdgeInsets.symmetric(vertical: 5.0, horizontal: 5.0),
+          height: MediaQuery.of(context).size.height * 0.4,
+          child: _map_bandlist(ctx)),
+    );
+  }
+
+  _map_bandlist(BuildContext ctx) {
+    return Container(child: Consumer<AssociatedBandModal>(
+      builder: (context, modal, _) {
+        return modal.items != null && modal.items.data!=null
+            ? ListView.builder(
+                itemCount: modal.items.data.length,
+                scrollDirection: Axis.horizontal,
+                itemBuilder: (ctx, index)
+//        Places.items.map((data)
+                    {
+                  return Container(
+                      width: MediaQuery.of(ctx).size.width / 1.3,
+                      padding: EdgeInsets.all(8.0),
+                      child: GestureDetector(
+                          onTap: () {
+                            _dicoverbottonSheet(ctx, modal.items.data[index],
+                                modal.items.data[index].id);
+                          },
+                          child: Card(
+                            elevation: 2.0,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(5.0)),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Stack(
+                                  children: <Widget>[
+                                    ClipRRect(
+                                      borderRadius: const BorderRadius.only(
+                                          topLeft: Radius.circular(5),
+                                          topRight: Radius.circular(5)),
+                                      child: modal.items.data[index].bandDetails
+                                                      .bandPic !=
+                                                  null &&
+                                              modal
+                                                  .items
+                                                  .data[index]
+                                                  .bandDetails
+                                                  .bandPic
+                                                  .isNotEmpty
+                                          ? FadeInImage(
+                                              placeholder: AssetImage(
+                                                  Res.band_sqaredefaultIMg),
+                                              image: NetworkImage(
+                                                modal.items.data[index]
+                                                    .bandDetails.bandPic,
+                                              ),
+                                              height: 100,
+                                              width: double.infinity,
+                                              fit: BoxFit.cover,
+                                            )
+                                          : Image.asset(
+                                              Res.band_sqaredefaultIMg,
+                                              height: 100,
+                                              width: double.infinity,
+                                              fit: BoxFit.cover,
+                                            ),
+                                    ),
+                                    Container(
+                                        margin: EdgeInsets.only(left: 10.0),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: <Widget>[
+                                            Flexible(
+                                                child: Text(
+                                              modal
+                                                          .items
+                                                          .data[index]
+                                                          .bandDetails
+                                                          .bandName !=
+                                                      null
+                                                  ? modal.items.data[index]
+                                                      .bandDetails.bandName
+                                                  : '',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  color: Color.fromRGBO(
+                                                      255, 255, 255, 10),
+                                                  fontSize: 22.0,
+                                                  fontFamily: 'AvenirNext',
+                                                  fontWeight: FontWeight.w700),
+                                            )),
+                                            IconButton(
+                                                padding: EdgeInsets.zero,
+                                                icon: modal.items.data[index]
+                                                            .isLiked !=
+                                                        1
+                                                    ? Icon(
+                                                        Icons.favorite_border)
+                                                    : Icon(
+                                                        Icons.favorite,
+                                                        color: Colors.red[900],
+                                                      ),
+                                                color: Colors.white,
+                                                iconSize: 30.0,
+                                                onPressed: () {})
+                                          ],
+                                        )),
+                                  ],
+                                ),
+                                Container(
+                                  alignment: Alignment.bottomCenter,
+                                  margin: EdgeInsets.all(10.0),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: <Widget>[
+                                      Text(
+                                        modal.items.data[index].placeDetails
+                                                    .name !=
+                                                null
+                                            ? modal.items.data[index]
+                                                .placeDetails.name
+                                            : '',
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            color:
+                                                Color.fromRGBO(38, 38, 40, 10),
+                                            fontSize: 20.0,
+                                            fontWeight: FontWeight.w700,
+                                            fontFamily: 'AvenirNext'),
+                                      ),
+                                      Comman.sizeBoxHeight(3.0),
+                                      Text(
+                                        modal.items.data[index].placeDetails
+                                                    .address !=
+                                                null
+                                            ? modal.items.data[index]
+                                                .placeDetails.address
+                                            : '',
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 13.0,
+                                            color: Color.fromRGBO(
+                                                155, 155, 155, 10),
+                                            fontFamily: 'AvenirNext'),
+                                      ),
+                                      Comman.sizeBoxHeight(10.0),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: <Widget>[
+                                          Expanded(
+                                              flex: 3,
+                                              child: Row(
+                                                children: <Widget>[
+                                                  RatingBar.readOnly(
+                                                      maxRating: 5,
+                                                      initialRating: modal
+                                                                  .items
+                                                                  .data[index]
+                                                                  .avg_Rating !=
+                                                              null
+                                                          ? double.parse(modal
+                                                              .items
+                                                              .data[index]
+                                                              .avg_Rating)
+                                                          : 0.0,
+                                                      size: 22.0,
+                                                      filledColor:
+                                                          Color.fromRGBO(
+                                                              255, 199, 0, 10),
+                                                      filledIcon: Icons.star,
+                                                      emptyIcon:
+                                                          Icons.star_border),
+                                                  Comman.sizeBoxWidth(5.0),
+                                                  /*FittedBox(
+//                                                      fit: BoxFit.contain,
+                                                      child: */
+                                                  Text(
+                                                    modal.items.data[index]
+                                                                .avg_Rating !=
+                                                            null
+                                                        ? Comman.roundDouble(
+                                                                    double.parse(modal
+                                                                        .items
+                                                                        .data[
+                                                                            index]
+                                                                        .avg_Rating),
+                                                                    1)
+                                                                .toString() +
+                                                            ' avg'
+                                                        : '',
+                                                    softWrap: true,
+                                                    style: const TextStyle(
+                                                        color: Color.fromRGBO(
+                                                            127, 127, 127, 10),
+                                                        fontFamily:
+                                                            'AvenirNext',
+                                                        fontSize: 15.0),
+//                                                      )
+                                                  ),
+                                                ],
+                                              )),
+
+                                          Expanded(
+                                              flex: 1,
+                                              child: Text(
+                                                modal.items.data!=null &&
+                                                    modal.items.data[index].getAssociateEvent!=null &&
+                                                    modal.items.data[index].getAssociateEvent.length>0?
+                                                    '\$ ${modal.items.data[index].getAssociateEvent[0]
+                                                    .eventTicket[0].price.toString()}':'',
+                                                softWrap: true,
+                                                textAlign: TextAlign.end,
+                                                style: const TextStyle(
+                                                    fontSize: 15.0,
+                                                    color: Color.fromRGBO(
+                                                        163, 35, 165, 10),
+                                                    fontWeight: FontWeight.w700,
+                                                    fontFamily: 'AvenirNext'),
+                                              )),
+//                              ),
+                                        ],
+                                      )
+                                    ],
+                                  ),
+//                    )
+                                )
+                              ],
+                            ),
+                          )));
+                }
+//        ).toList()
+                )
+            : SizedBox();
+      },
+    ));
+  }
+
+  _dicoverbottonSheet(BuildContext ctx, dataItems, id) {
+    showModalBottomSheet(
+        context: ctx,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(15.0),
+                topRight: Radius.circular(15.0))),
+        backgroundColor: Colors.white,
+        builder: (context) {
+          return DiscoverBand_widgets(key: ValueKey(id), data: dataItems);
+//          return PlacesBottonSheets(data: data);
+        });
+  }
+
+  Future<bool> _onWillPop() async {
+    return (await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(
+              'Alert!',
+              style:
+                  TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            ),
+            content: Text('Do you want to exit an App?'),
+            actions: <Widget>[
+              FlatButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text('No'),
+              ),
+              FlatButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text('Yes'),
+              ),
+            ],
+          ),
+        )) ??
+        false;
+  }
+
+
+  Future<void> showlocation() async {
+    ///bool geolocationStatus = await Geolocator().isLocationServiceEnabled();
+    try {
+//      bool geolocationStatus = await location.serviceEnabled();
+      bool geolocationStatus1 = await location.serviceEnabled();
+      if (Theme.of(context).platform == TargetPlatform.android) {
+        if (geolocationStatus1) {
+          if (await location.hasPermission() == PermissionStatus.granted) {
+            var data = await location.getLocation();
+            setState(() {
+              _locationData = data;
+              _center =
+                  new LatLng(_locationData.latitude, _locationData.longitude);
+            });
+            setCustomMapPin();
+          } else {
+            _permissionGranted = await location.requestPermission();
+            if (_permissionGranted != PermissionStatus.granted) {
+              if (_permissionGranted == PermissionStatus.deniedForever) {
+                _scaffoldKey.currentState.showSnackBar(new SnackBar(
+                  content: Text('permission denied forever'),
+                  duration: Duration(minutes: 2),
+                  action: SnackBarAction(
+                      label: 'Open setting',
+                      onPressed: () => AppSettings.openAppSettings()),
+                ));
+              } else {
+                show_locationdialog(context,
+                    'You have to enable location permisson to show all the near by places');
+              }
+//              _permissionGranted = await location.requestPermission();
+
+            } else {
+              var data = await location.getLocation();
+              setState(() {
+                _locationData = data;
+                _center =
+                    new LatLng(_locationData.latitude, _locationData.longitude);
+              });
+              setCustomMapPin();
+            }
+          }
+        } else {
+          if (!await location.requestService()) {
+            show_locationdialog(context,
+                'You have to enable location service to show all the near by places');
+          } else {
+            showlocation();
+          }
+        }
+      } else {
+        if (!await location.serviceEnabled()) {
+          //AppSettings.openLocationSettings();
+          locationPemissionDialog(context,
+              'You have to enable location service to show all the near by places');
+        } else {
+          /*var data1 =await location.requestService();
+          print('data $data1');*/
+          _permissionGranted = await location.hasPermission();
+          // print('_permissionGranted $_permissionGranted');
+          // print('status ${_permissionGranted != PermissionStatus.granted}');
+          if (_permissionGranted != PermissionStatus.granted) {
+            _permissionGranted = await location.requestPermission();
+            print('_permissionGranted $_permissionGranted');
+            if (_permissionGranted != PermissionStatus.granted) {
+              _scaffoldKey.currentState.showSnackBar(new SnackBar(
+                content: Text('permission denied forever'),
+                duration: Duration(minutes: 2),
+                action: SnackBarAction(
+                    label: 'Open setting',
+                    onPressed: () => AppSettings.openAppSettings()),
+              ));
+            } else {
+              var data = await location.getLocation();
+              print('_locationData $data');
+              setState(() {
+                _locationData = data;
+                _center =
+                    new LatLng(_locationData.latitude, _locationData.longitude);
+              });
+              setCustomMapPin();
+            }
+          } else {
+            var data = await location.getLocation();
+            print('_locationData $data');
+            setState(() {
+              _locationData = data;
+              _center =
+                  new LatLng(_locationData.latitude, _locationData.longitude);
+            });
+            setCustomMapPin();
+          }
+        }
+      }
+    } catch (exception) {
+      print('exception is $exception');
+    }
+  }
+
+  show_locationdialog(BuildContext context, String message) {
+    showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Alert',
+                style: TextStyle(
+                    color: Theme.of(context).primaryColor,
+                    fontWeight: FontWeight.bold)),
+            content: Text(message),
+            actions: <Widget>[
+              Center(
+                child: FlatButton(
+                  child: Text('Ok'),
+                  onPressed: () {
+//                    exit(0);
+                    Navigator.of(context).pop();
+                    showlocation();
+                  },
+                ),
+              )
+            ],
+          );
+        });
+  }
+
+  show_permissiondialog(BuildContext context, String message) {
+    showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Alert',
+                style: TextStyle(
+                    color: Theme.of(context).primaryColor,
+                    fontWeight: FontWeight.bold)),
+            content: Text(message),
+            actions: <Widget>[
+              Center(
+                child: FlatButton(
+                  child: Text('Ok'),
+                  onPressed: () {
+//                    exit(0);
+                    Navigator.of(context).pop();
+                    showlocation();
+                  },
+                ),
+              )
+            ],
+          );
+        });
+  }
+
+  locationPemissionDialog(BuildContext context, String message) {
+    showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Alert',
+                style: TextStyle(
+                    color: Theme.of(context).primaryColor,
+                    fontWeight: FontWeight.bold)),
+            content: Text(message),
+            actions: <Widget>[
+              Center(
+                child: FlatButton(
+                  child: Text('Ok'),
+                  onPressed: () {
+//                    exit(0);
+                    Navigator.of(context).pop();
+                    AppSettings.openLocationSettings();
+                  },
+                ),
+              )
+            ],
+          );
+        });
+  }
+
+//call filter record function from customappbar
+  void filterRecord(String selectedDate, List<int> interestedList) async {
+    // print('selected date $selectedDate selected interested $interestedList');
+    Navigator.of(context).pop();
+    if (_locationData.latitude != null && _locationData.longitude != null)
+    {
+      disbloc.discoverListSink.add(null);
+      disbloc.dateSink.add(selectedDate);
+      disbloc.interestListSink.add(interestedList);
+      disbloc.counterEventSink.add(filterRecordDefault());
+      //Provider.of<AssociatedBandModal>(context, listen: false).updateListValues();
+    }
+  }
+
+  void searchDiscover(String searchText, List<int> interestedList) async {
+    disbloc.discoverListSink.add(null);
+    disbloc.seachTextSink.add(searchText);
+    disbloc.counterEventSink.add(searchdiscover());
+    Provider.of<AssociatedBandModal>(context, listen: false).updateListValues();
+  }
+
+
+  Future<void> gotoLocation(double latt,double lng) async
+  {
+//    if(showband){
+      final GoogleMapController controller = await _controller.future;
+      controller.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(
+//        bearing: 192.8334901395799,
+//        tilt: 59.440717697143555,
+        target: LatLng(latt,lng),
+        zoom: 17,
+      )));
+
+//    }
+
+  }
+
+ void openPlacepicker(latti,lng) async
+ {
+   disbloc.discoverListSink.add(null);
+   disbloc.placeLattlngSink
+       .add(LatLng(latti,lng));
+   disbloc.counterEventSink.add(placePickeSearch());
+   Provider.of<AssociatedBandModal>(context, listen: false).updateListValues();
+  }
+
+  Set<Marker> _showmarker(modal) {
+    if (modal != null && modal.length > 0)
+    {
+      _marker = {};
+      for (int i = 0; i < modal.length; i++)
+      {
+        if (modal[i].placeAddressLat != null &&
+            modal[i].placeAddressLong != null)
+        {
+          _marker.add(Marker(
+            icon: modal[i].isLive==0?marker_icon:liveMarkerIcon,
+            markerId: MarkerId(modal[i].placeId.toString()),
+            position: LatLng(double.parse(modal[i].placeAddressLat),
+                double.parse(modal[i].placeAddressLong)),
+            onTap: () async
+            {
+              if (modal[i].placeId != null && modal[i].placeId != '') {
+//                openWindow(context,discoverResponse.data[i].placeId);
+                showDialog(
+//                barrierDismissible: f,
+                    context: context,
+                    builder: (BuildContext context) {
+//                    openWindow(context,i);
+                      return DiscoverPopupWidgets(
+                          Id: modal[i].placeId.toString());
+                    });/*.then((value)
+                    {
+                      //Provider.of<AssociatedBandModal>(context, listen: false).updateListValues();
+                    });*/
+
+                await associateProvider
+                    .getAssoicatedBands(modal[i].placeId.toString());
+              } else {
+                Comman.showSnakBarwithkey(
+                    Constants.servererror, _scaffoldKey, Colors.red);
+              }
+            },
+          ));
+        }
+      }
+      if(modal!=null)
+      {
+        gotoLocation(double.parse(modal[0].placeAddressLat),
+            double.parse(modal[0].placeAddressLong));
+        /* if(_mapcontroller!=null)
+        {
+          _mapcontroller.animateCamera(
+            CameraUpdate.newCameraPosition(
+              CameraPosition(target: LatLng(double.parse(modal[0].placeAddressLat),
+                  double.parse(modal[0].placeAddressLong)),zoom: 10),
+            ),
+          );*/
+
+
+      }
+
+    }else{
+      _marker = {};
+      /*Comman.showSnakBarwithkey(
+          Constants.norecordfound, _scaffoldKey, Colors.red);*/
+    }
+    return _marker;
+  }
+
+  @override
+  void dispose() {
+    disbloc.dispose();
+    print('dispose called');
+    Provider.of<AssociatedBandModal>(context, listen: false).updateListValues();
+    super.dispose();
+  }
+}
